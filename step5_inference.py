@@ -1,14 +1,17 @@
 """
-Step 5: Run Inference — Detect & Extract Articles from New Newspaper Pages
-==========================================================================
+Step 5: Extract & Separate Articles from New Newspaper Pages
+============================================================
 - Loads trained model from models/sinhala-layoutlmv3-final/
-- Runs Sinhala OCR + LayoutLMv3 on each image
-- Groups tokens into articles (headline + body)
-- Saves results to output/extracted_articles.json
+- Runs Sinhala OCR + LayoutLMv3 on each page image
+- Crops each detected region and saves it
+
+Output structure:
+    output/{newspaper}/articles/{page}/article_N.png
+    output/{newspaper}/ads/{page}/ad_N.png
 
 Usage:
     python step5_inference.py
-    python step5_inference.py --image output_images/lankadeepa_page_001.png
+    python step5_inference.py --image output_images/2024-11-11_page_001.png
 """
 
 import os
@@ -29,20 +32,14 @@ OCR_CONF_THRESHOLD = 30
 
 LABEL2ID = {
     'O': 0,
-    'B-headline': 1,    'I-headline': 2,
-    'B-article_body': 3,'I-article_body': 4,
-    'B-advertisement': 5,'I-advertisement': 6,
-    'B-image_caption': 7,'I-image_caption': 8,
-    'B-other': 9,       'I-other': 10,
-    'B-full_article': 11,'I-full_article': 12,
+    'B-full_article': 1,  'I-full_article': 2,
+    'B-advertisement': 3, 'I-advertisement': 4,
 }
 ID2LABEL = {v: k for k, v in LABEL2ID.items()}
 # ──────────────────────────────────────────────────────────────────────────────
 
 
 def load_model(model_path):
-    """Load trained LayoutLMv3 model and processor."""
-    # Fall back to base model if trained model not found yet
     if not os.path.exists(model_path):
         print(f"[!] Trained model not found at '{model_path}'")
         print("    Falling back to base model (untrained — low accuracy)")
@@ -63,12 +60,8 @@ def load_model(model_path):
 
 
 def run_ocr(img, lang='sin', conf_threshold=30):
-    """Run Tesseract OCR and return words + normalized boxes + raw positions."""
     img_w, img_h = img.size
-    ocr = pytesseract.image_to_data(
-        img, lang=lang,
-        output_type=pytesseract.Output.DICT
-    )
+    ocr = pytesseract.image_to_data(img, lang=lang, output_type=pytesseract.Output.DICT)
 
     words, norm_boxes, positions = [], [], []
     for i, word in enumerate(ocr['text']):
@@ -81,26 +74,20 @@ def run_ocr(img, lang='sin', conf_threshold=30):
         if conf < conf_threshold:
             continue
 
-        x = ocr['left'][i]
-        y = ocr['top'][i]
-        w = ocr['width'][i]
-        h = ocr['height'][i]
-
-        norm_box = [
+        x, y, w, h = ocr['left'][i], ocr['top'][i], ocr['width'][i], ocr['height'][i]
+        norm_boxes.append([
             int(x / img_w * 1000),
             int(y / img_h * 1000),
             int((x + w) / img_w * 1000),
             int((y + h) / img_h * 1000),
-        ]
+        ])
         words.append(word)
-        norm_boxes.append(norm_box)
         positions.append((x, y, w, h))
 
     return words, norm_boxes, positions
 
 
 def predict_page(image_path, processor, model):
-    """Run model inference on a single page image."""
     img = Image.open(image_path).convert('RGB')
     words, norm_boxes, positions = run_ocr(img)
 
@@ -125,88 +112,38 @@ def predict_page(image_path, processor, model):
         preds = [preds]
 
     token_labels = [ID2LABEL.get(p, 'O') for p in preds[:len(words)]]
-
     return words, token_labels, positions
 
 
-def extract_articles(words, token_labels, positions):
-    """Group predicted tokens into article regions and match to headlines."""
-    regions = []
+def extract_regions(words, token_labels, positions):
+    """Group BIO tokens into contiguous regions. Returns (articles, ads)."""
+    raw = []
     current = None
 
     for word, label, pos in zip(words, token_labels, positions):
         if label.startswith('B-'):
             if current:
-                regions.append(current)
-            current = {
-                'type': label[2:],
-                'words': [word],
-                'pos': [pos],
-            }
+                raw.append(current)
+            current = {'type': label[2:], 'words': [word], 'pos': [pos]}
         elif label.startswith('I-') and current:
             current['words'].append(word)
             current['pos'].append(pos)
         else:
             if current:
-                regions.append(current)
+                raw.append(current)
                 current = None
 
     if current:
-        regions.append(current)
+        raw.append(current)
 
-    headlines = [r for r in regions if r['type'] == 'headline']
-    bodies    = [r for r in regions if r['type'] == 'article_body']
-    full_articles = [r for r in regions if r['type'] == 'full_article']
-
-    articles = []
-
-    # 1. Extract full_article regions directly
-    for fa in full_articles:
-        news_text = ' '.join(fa['words']).strip()
-        if news_text:
-            articles.append({
-                'news': news_text,
-                'pos': list(fa['pos']),
-            })
-
-    # 2. Extract legacy article_body regions matched to headlines
-    for body in bodies:
-        body_top = min(p[1] for p in body['pos'])
-
-        # Find closest headline above this body
-        candidates = [
-            h for h in headlines
-            if min(p[1] for p in h['pos']) < body_top
-        ]
-        all_positions = list(body['pos'])
-        if candidates:
-            headline = max(
-                candidates,
-                key=lambda h: min(p[1] for p in h['pos'])
-            )
-            headline_text = ' '.join(headline['words'])
-            all_positions.extend(headline['pos'])
-        else:
-            headline_text = ''
-
-        body_text = ' '.join(body['words'])
-        news_text = f"{headline_text} {body_text}".strip() if headline_text else body_text
-        if news_text:
-            articles.append({
-                'news': news_text,
-                'pos': all_positions,
-            })
-
-    return articles
+    articles = [r for r in raw if r['type'] == 'full_article']
+    ads      = [r for r in raw if r['type'] == 'advertisement']
+    return articles, ads
 
 
-def crop_and_save_article(image_path, pos_list, output_path, padding=15):
-    """Crop article from original image using its word positions and save it."""
+def crop_and_save(image_path, pos_list, output_path, padding=15):
     if not pos_list:
         return None
-
-    # Calculate overall bounding box enclosing all word boxes in pos_list
-    # Each pos is (x, y, w, h)
     xmin = min(p[0] for p in pos_list)
     ymin = min(p[1] for p in pos_list)
     xmax = max(p[0] + p[2] for p in pos_list)
@@ -215,43 +152,50 @@ def crop_and_save_article(image_path, pos_list, output_path, padding=15):
     try:
         img = Image.open(image_path)
         img_w, img_h = img.size
-
-        # Apply padding and clamp to image dimensions
-        xmin = max(0, xmin - padding)
-        ymin = max(0, ymin - padding)
+        xmin = max(0,     xmin - padding)
+        ymin = max(0,     ymin - padding)
         xmax = min(img_w, xmax + padding)
         ymax = min(img_h, ymax + padding)
-
-        # Crop and save
-        cropped_img = img.crop((xmin, ymin, xmax, ymax))
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
-        cropped_img.save(output_path)
+        img.crop((xmin, ymin, xmax, ymax)).save(output_path)
         return output_path
     except Exception as e:
-        print(f"  [ERROR] Failed to crop or save article: {e}")
+        print(f"  [ERROR] {e}")
         return None
 
 
+def parse_image_name(image_path):
+    """'2024-11-11_page_001.png' → ('2024-11-11', 'page_001')"""
+    base = os.path.splitext(os.path.basename(image_path))[0]
+    if '_page_' in base:
+        newspaper, page_num = base.rsplit('_page_', 1)
+        return newspaper, f"page_{page_num}"
+    return base, 'page_001'
+
+
 def process_image(image_path, processor, model):
-    """Full pipeline for one image."""
     words, labels, positions = predict_page(image_path, processor, model)
     if not words:
-        return []
-    articles = extract_articles(words, labels, positions)
+        return [], []
 
-    base_name = os.path.splitext(os.path.basename(image_path))[0]
-    for idx, art in enumerate(articles):
-        output_img_path = f"output/separated_articles/{base_name}_article_{idx+1}.png"
-        saved_path = crop_and_save_article(image_path, art.get('pos'), output_img_path)
-        if saved_path:
-            # Save path as relative/standardized format
-            art['image_path'] = saved_path.replace('\\', '/')
-        
-        # Remove 'pos' to avoid JSON clutter
-        if 'pos' in art:
-            del art['pos']
+    raw_articles, raw_ads = extract_regions(words, labels, positions)
+    newspaper, page = parse_image_name(image_path)
 
-    return articles
+    articles = []
+    for idx, art in enumerate(raw_articles):
+        out_path = f"output/{newspaper}/articles/{page}/article_{idx+1}.png"
+        saved = crop_and_save(image_path, art['pos'], out_path)
+        entry = {'image_path': saved.replace('\\', '/') if saved else None}
+        articles.append(entry)
+
+    ads = []
+    for idx, ad in enumerate(raw_ads):
+        out_path = f"output/{newspaper}/ads/{page}/ad_{idx+1}.png"
+        saved = crop_and_save(image_path, ad['pos'], out_path)
+        entry = {'image_path': saved.replace('\\', '/') if saved else None}
+        ads.append(entry)
+
+    return articles, ads
 
 
 def main(single_image=None):
@@ -278,22 +222,28 @@ def main(single_image=None):
     print(f"[✓] Processing {len(image_paths)} image(s)...\n")
     all_results = {}
     total_articles = 0
+    total_ads = 0
 
     for img_path in image_paths:
         print(f"→ {os.path.basename(img_path)}")
-        articles = process_image(img_path, processor, model)
-        all_results[os.path.basename(img_path)] = articles
+        newspaper, page = parse_image_name(img_path)
+        articles, ads = process_image(img_path, processor, model)
+
+        all_results.setdefault(newspaper, {})[page] = {
+            'articles': articles,
+            'ads':      ads,
+        }
         total_articles += len(articles)
-        print(f"  Found {len(articles)} article(s)")
-        for i, a in enumerate(articles):
-            news_preview = a['news'][:60] if a.get('news') else '(no news text)'
-            print(f"    [{i+1}] {news_preview}...")
+        total_ads      += len(ads)
+        print(f"  {len(articles)} article(s), {len(ads)} ad(s)")
 
     with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:
         json.dump(all_results, f, ensure_ascii=False, indent=2)
 
-    print(f"\n[✓] Done! Total articles extracted: {total_articles}")
-    print(f"    Results saved → {OUTPUT_FILE}")
+    print(f"\n[✓] Done!")
+    print(f"    Articles : {total_articles}")
+    print(f"    Ads      : {total_ads}")
+    print(f"    Results  → {OUTPUT_FILE}")
 
 
 if __name__ == '__main__':

@@ -35,21 +35,20 @@ FINAL_DIR    = './models/sinhala-layoutlmv3-final'
 
 LABEL2ID = {
     'O': 0,
-    'B-headline': 1,    'I-headline': 2,
-    'B-article_body': 3,'I-article_body': 4,
-    'B-advertisement': 5,'I-advertisement': 6,
-    'B-image_caption': 7,'I-image_caption': 8,
-    'B-other': 9,       'I-other': 10,
-    'B-full_article': 11,'I-full_article': 12,
+    'B-full_article': 1,  'I-full_article': 2,
+    'B-advertisement': 3, 'I-advertisement': 4,
 }
 ID2LABEL = {v: k for k, v in LABEL2ID.items()}
 NUM_LABELS = len(LABEL2ID)
 
 # Training hyperparameters
+# Lower LR + cosine schedule + label smoothing improve generalisation to
+# unseen newspapers by preventing the model from over-fitting layout patterns
+# of the specific papers used during annotation.
 NUM_EPOCHS    = 15
 BATCH_SIZE    = 1       # keep at 1 for CPU / low VRAM
 GRAD_ACCUM    = 4       # effective batch size = 4
-LEARNING_RATE = 1e-5
+LEARNING_RATE = 5e-6    # lower than default — better generalisation
 # ──────────────────────────────────────────────────────────────────────────────
 
 
@@ -105,6 +104,8 @@ def main():
         learning_rate=LEARNING_RATE,
         warmup_ratio=0.1,
         weight_decay=0.01,
+        lr_scheduler_type='cosine',      # cosine decay → smoother convergence
+        label_smoothing_factor=0.1,      # prevents overconfidence on unseen layouts
         evaluation_strategy='epoch',
         save_strategy='epoch',
         load_best_model_at_end=True,
@@ -114,7 +115,7 @@ def main():
         fp16=False,          # set True only if using GPU with CUDA
         no_cuda=True,        # CPU training — remove this line if using GPU
         dataloader_num_workers=0,
-        report_to='none',    # set to 'wandb' if you want experiment tracking
+        report_to='none',
     )
 
     trainer = Trainer(

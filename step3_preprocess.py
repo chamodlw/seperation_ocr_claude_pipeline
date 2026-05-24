@@ -27,12 +27,8 @@ RANDOM_SEED   = 42
 
 LABEL2ID = {
     'O': 0,
-    'B-headline': 1,    'I-headline': 2,
-    'B-article_body': 3,'I-article_body': 4,
-    'B-advertisement': 5,'I-advertisement': 6,
-    'B-image_caption': 7,'I-image_caption': 8,
-    'B-other': 9,       'I-other': 10,
-    'B-full_article': 11,'I-full_article': 12,
+    'B-full_article': 1,  'I-full_article': 2,
+    'B-advertisement': 3, 'I-advertisement': 4,
 }
 ID2LABEL = {v: k for k, v in LABEL2ID.items()}
 # ──────────────────────────────────────────────────────────────────────────────

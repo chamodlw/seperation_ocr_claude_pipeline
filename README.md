@@ -1,223 +1,138 @@
 # Sinhala Newspaper Article Separation Pipeline
-## Using LayoutLMv3 + Tesseract OCR
+### LayoutLMv3 Training Method
 
 ---
 
 ## What This Does
 
-```
-PDF Newspaper  →  Images  →  Layout Detection  →  Article Extraction  →  Sinhala Text JSON & Cropped Images
-```
-
-Takes Sinhala newspaper PDFs (Lankadeepa, Dinamina, Aruna, Diwaina, Mawbima),
-separates individual news articles, and outputs:
-- Structured JSON containing extracted text (`output/extracted_articles.json`)
-- Clean, page-wise cropped images for each separate article (`output/separated_articles/`)
-
----
-
-## Folder Structure
+Automatically separates news articles and advertisements from Sinhala newspaper PDFs using a fine-tuned LayoutLMv3 model. Each detected region is saved as a cropped image.
 
 ```
-sinhala_newspaper_pipeline/
-│
-├── input_pdfs/              ← PUT YOUR NEWSPAPER PDFs HERE
-├── output_images/           ← Generated page images (auto-created)
-├── annotated_data/          ← Label Studio exports + encoded dataset
-├── models/                  ← Trained model saved here
-├── output/                  ← Final extracted JSON and cropped images
-│   ├── extracted_articles.json
-│   └── separated_articles/   ← Page-wise cropped article images
-│
-├── step1_pdf_to_images.py   ← Convert PDFs → PNG images
-├── step2_build_dataset.py   ← Build training dataset from annotations
-├── step3_preprocess.py      ← Tokenize + encode for LayoutLMv3
-├── step4_train.py           ← Fine-tune the model
-├── step5_inference.py       ← Run on new newspapers → extract articles
-├── step6_evaluate.py        ← Measure F1 accuracy
-│
-├── utils_text_clean.py      ← Sinhala text cleaning helpers
-├── utils_visualize.py       ← Draw colored boxes on images
-└── requirements.txt
+PDF  →  Images  →  Annotate (once)  →  Train Model  →  Auto-separate new newspapers
 ```
 
 ---
 
-## Prerequisites
+## Output Structure
 
-- Python 3.9 (in conda env `layoutlm`)
-- Tesseract with Sinhala language pack installed
-- All pip packages installed (see requirements.txt)
+```
+output/
+└── 2024-11-11/
+    ├── articles/
+    │   ├── page_001/
+    │   │   ├── article_1.png
+    │   │   ├── article_2.png
+    │   │   └── article_3.png
+    │   └── page_002/
+    │       └── article_1.png
+    └── ads/
+        ├── page_001/
+        │   └── ad_1.png
+        └── page_002/
+            └── ad_1.png
+```
 
 ---
 
-## Step-by-Step Guide
+## Setup
 
-### STEP 1 — Put your PDFs in the input folder
-
-Copy your newspaper PDF files into the `input_pdfs/` folder.
-
-```
-input_pdfs/
-  lankadeepa_2024_01_15.pdf
-  dinamina_2024_01_15.pdf
-  ...
+```cmd
+conda create -n layoutlm python=3.9 -y
+conda activate layoutlm
+pip install torch torchvision
+pip install transformers==4.38.0 datasets seqeval timm
+pip install pytesseract opencv-python pdf2image label-studio
 ```
 
-### STEP 2 — Convert PDFs to Images
+Also install:
+- **Tesseract OCR** with Sinhala language pack (`sin`)
+- **Poppler** for Windows — add `C:\poppler\Library\bin` to PATH
 
+---
+
+## Steps
+
+> Always use **CMD** (not PowerShell) with `conda activate layoutlm`
+
+### 1 — Convert PDFs to Images
 ```cmd
 python step1_pdf_to_images.py
 ```
-
-Output: PNG images in `output_images/` at 300 DPI.
+Put PDFs in `input_pdfs/` first. Output saved to `output_images/` at 300 DPI.
 
 ---
 
-### STEP 3 — Annotate Pages with Label Studio
-
-You need to label 300–500 pages to train the model.
-
-**Start Label Studio:**
+### 2 — Annotate with Label Studio
 ```cmd
-pip install label-studio
 label-studio start --port 8080
 ```
-
-Open http://localhost:8080 and:
-1. Create new project → Image Segmentation
-2. Paste this XML in the Label Config editor:
+Open **http://localhost:8080** then:
+1. Create project → **Object Detection with Bounding Boxes**
+2. Settings → Labeling Interface → Code → paste:
 
 ```xml
 <View>
-  <Image name="image" value="$image"/>
+  <Image name="image" value="$image" zoom="true" zoomControl="true"/>
   <RectangleLabels name="label" toName="image">
-    <Label value="headline"      background="#7F77DD"/>
-    <Label value="article_body"  background="#1D9E75"/>
+    <Label value="full_article"  background="#F5C400"/>
     <Label value="advertisement" background="#D85A30"/>
-    <Label value="image_caption" background="#D4537E"/>
-    <Label value="other"         background="#888780"/>
   </RectangleLabels>
 </View>
 ```
 
 3. Import images from `output_images/`
-4. Draw bounding boxes around each region
-5. **Export** as **JSON-MIN** → save as `annotated_data/annotations.json`
+4. Draw bounding boxes — **150+ pages** needed for good accuracy
+5. Export as **JSON** → save to `annotated_data/annotations.json`
 
 **Annotation tips:**
-- Spend 10–15 min per page
-- Label at least 300 pages for usable accuracy
-- Focus on headline/body boundary — that's the hardest part
+
+| Label | Color | Draw around |
+|-------|-------|-------------|
+| `full_article` | 🟡 Yellow | Each complete news article (headline + body together) |
+| `advertisement` | 🟠 Orange | Ads and promotional content |
+
+- For L-shaped articles: draw 2 separate `full_article` boxes
+- Ignore photos, page numbers, borders — leave them unannotated
+- **For better accuracy on unseen newspapers**: annotate pages from at least 3 different newspapers (e.g. Lankadeepa, Dinamina, Aruna). A model trained on one paper's layout will struggle with others.
 
 ---
 
-### STEP 4 — Build Training Dataset
-
+### 3 — Build Dataset
 ```cmd
 python step2_build_dataset.py
 ```
 
-Runs Sinhala OCR on each annotated image and assigns BIO labels.
-Output: `annotated_data/sinhala_dataset.json`
-
----
-
-### STEP 5 — Preprocess for LayoutLMv3
-
+### 4 — Preprocess
 ```cmd
 python step3_preprocess.py
 ```
 
-Tokenizes and encodes the dataset.
-Output: `annotated_data/encoded_dataset/`
-
----
-
-### STEP 6 — Train the Model
-
+### 5 — Train Model
 ```cmd
 python step4_train.py
 ```
+> Runs overnight on CPU. Best model saved to `models/sinhala-layoutlmv3-final/`
 
-⚠️ **This takes a long time on CPU — let it run overnight.**
-- ~1–2 hours per epoch × 15 epochs on CPU
-- The best model is automatically saved to `models/sinhala-layoutlmv3-final/`
+Training uses cosine LR scheduling and label smoothing so the model generalises better to newspaper layouts it has not seen before.
 
----
-
-### STEP 7 — Extract Articles from New Newspapers
-
-Once training is done:
-
-**Process all images:**
+### 6 — Separate Articles from New Newspapers
 ```cmd
+python step1_pdf_to_images.py
 python step5_inference.py
 ```
+Cropped images saved to `output/{date}/articles/` and `output/{date}/ads/`
 
-**Process a single image:**
-```cmd
-python step5_inference.py --image output_images/lankadeepa_page_001.png
-```
-
-Output: 
-- `output/extracted_articles.json` containing the extracted text and image references.
-- Cropped article images saved under `output/separated_articles/` page-wise.
-
----
-
-### STEP 8 — Evaluate Model Accuracy
-
+### 7 — Evaluate Accuracy
 ```cmd
 python step6_evaluate.py
 ```
 
-Target F1 scores:
-- headline:      > 0.90
-- article_body:  > 0.88
-- advertisement: > 0.85
+| Class | Target F1 |
+|-------|-----------|
+| full_article | > 0.88 |
+| advertisement | > 0.85 |
 
-If any class is below 0.80, annotate 50 more pages for that class and retrain.
-
----
-
-### OPTIONAL — Visualize Predictions
-
-Draw colored bounding boxes on a page to see what the model detects:
-
-```cmd
-python utils_visualize.py --image output_images/lankadeepa_page_001.png
-```
-
-Output saved to `output/lankadeepa_page_001_visualized.png`
-
-**Color key:**
-- 🟣 Purple  = headline
-- 🟢 Teal    = article body
-- 🟠 Coral   = advertisement
-- 🩷 Pink    = image caption
-- ⚫ Gray    = other
-
----
-
-## Output Format
-
-`output/extracted_articles.json`:
-
-```json
-{
-  "lankadeepa_page_001.png": [
-    {
-      "news": "ශ්‍රී ලංකාවේ ආර්ථිකය ශක්තිමත් වෙයි ශ්‍රී ලංකා මහ බැංකුව අද ප්‍රකාශ කළේ...",
-      "image_path": "output/separated_articles/lankadeepa_page_001_article_1.png"
-    },
-    {
-      "news": "ක්‍රිකට් කණ්ඩායම ජය ගනී ශ්‍රී ලංකා ක්‍රිකට් කණ්ඩායම ඊයේ...",
-      "image_path": "output/separated_articles/lankadeepa_page_001_article_2.png"
-    }
-  ]
-}
-```
+If a class is below target: annotate 50 more pages focused on that class (from different newspapers), then re-run steps 3 → 4 → 7.
 
 ---
 
@@ -225,24 +140,9 @@ Output saved to `output/lankadeepa_page_001_visualized.png`
 
 | Problem | Fix |
 |---------|-----|
-| `conda not recognized` | Use Anaconda Prompt or CMD, not PowerShell |
-| `tesseract not found` | Add `C:\Program Files\Tesseract-OCR` to PATH |
-| `sin` not in tesseract langs | Reinstall Tesseract with Sinhala language pack checked |
-| OCR produces garbage | Increase image DPI to 400 in step1 |
-| CUDA out of memory | Keep `no_cuda=True` in step4, use CPU |
-| Model not found in inference | Run step4_train.py first; training must complete |
-| Low F1 score | Annotate more pages; focus on low-scoring class |
-
----
-
-## Quick Reference — All Commands
-
-```cmd
-conda activate layoutlm
-python step1_pdf_to_images.py
-python step2_build_dataset.py
-python step3_preprocess.py
-python step4_train.py
-python step5_inference.py
-python step6_evaluate.py
-```
+| `conda not recognized` | Use CMD not PowerShell |
+| Poppler error | Install poppler, add `C:\poppler\Library\bin` to PATH |
+| `sin` not in tesseract | Reinstall Tesseract with Sinhala language pack checked |
+| Label Studio image error | Run `set LABEL_STUDIO_LOCAL_FILES_SERVING_ENABLED=true` before starting |
+| Low accuracy on new papers | Annotate pages from more newspapers — layout diversity is the key factor |
+| No output after inference | Run step4_train.py first — model must be trained |
