@@ -166,6 +166,7 @@ def extract_articles(words, token_labels, positions):
         if news_text:
             articles.append({
                 'news': news_text,
+                'pos': list(fa['pos']),
             })
 
     # 2. Extract legacy article_body regions matched to headlines
@@ -177,12 +178,14 @@ def extract_articles(words, token_labels, positions):
             h for h in headlines
             if min(p[1] for p in h['pos']) < body_top
         ]
+        all_positions = list(body['pos'])
         if candidates:
             headline = max(
                 candidates,
                 key=lambda h: min(p[1] for p in h['pos'])
             )
             headline_text = ' '.join(headline['words'])
+            all_positions.extend(headline['pos'])
         else:
             headline_text = ''
 
@@ -191,9 +194,42 @@ def extract_articles(words, token_labels, positions):
         if news_text:
             articles.append({
                 'news': news_text,
+                'pos': all_positions,
             })
 
     return articles
+
+
+def crop_and_save_article(image_path, pos_list, output_path, padding=15):
+    """Crop article from original image using its word positions and save it."""
+    if not pos_list:
+        return None
+
+    # Calculate overall bounding box enclosing all word boxes in pos_list
+    # Each pos is (x, y, w, h)
+    xmin = min(p[0] for p in pos_list)
+    ymin = min(p[1] for p in pos_list)
+    xmax = max(p[0] + p[2] for p in pos_list)
+    ymax = max(p[1] + p[3] for p in pos_list)
+
+    try:
+        img = Image.open(image_path)
+        img_w, img_h = img.size
+
+        # Apply padding and clamp to image dimensions
+        xmin = max(0, xmin - padding)
+        ymin = max(0, ymin - padding)
+        xmax = min(img_w, xmax + padding)
+        ymax = min(img_h, ymax + padding)
+
+        # Crop and save
+        cropped_img = img.crop((xmin, ymin, xmax, ymax))
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        cropped_img.save(output_path)
+        return output_path
+    except Exception as e:
+        print(f"  [ERROR] Failed to crop or save article: {e}")
+        return None
 
 
 def process_image(image_path, processor, model):
@@ -202,6 +238,19 @@ def process_image(image_path, processor, model):
     if not words:
         return []
     articles = extract_articles(words, labels, positions)
+
+    base_name = os.path.splitext(os.path.basename(image_path))[0]
+    for idx, art in enumerate(articles):
+        output_img_path = f"output/separated_articles/{base_name}_article_{idx+1}.png"
+        saved_path = crop_and_save_article(image_path, art.get('pos'), output_img_path)
+        if saved_path:
+            # Save path as relative/standardized format
+            art['image_path'] = saved_path.replace('\\', '/')
+        
+        # Remove 'pos' to avoid JSON clutter
+        if 'pos' in art:
+            del art['pos']
+
     return articles
 
 

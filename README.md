@@ -6,13 +6,13 @@
 ## What This Does
 
 ```
-PDF Newspaper  →  Images  →  Layout Detection  →  Article Extraction  →  Sinhala Text JSON
+PDF Newspaper  →  Images  →  Layout Detection  →  Article Extraction  →  Sinhala Text JSON & Cropped Images
 ```
 
 Takes Sinhala newspaper PDFs (Lankadeepa, Dinamina, Aruna, Diwaina, Mawbima),
-separates individual news articles, and outputs structured JSON with:
-- Article headline (Sinhala)
-- Article body text (Sinhala)
+separates individual news articles, and outputs:
+- Structured JSON containing extracted text (`output/extracted_articles.json`)
+- Clean, page-wise cropped images for each separate article (`output/separated_articles/`)
 
 ---
 
@@ -25,7 +25,9 @@ sinhala_newspaper_pipeline/
 ├── output_images/           ← Generated page images (auto-created)
 ├── annotated_data/          ← Label Studio exports + encoded dataset
 ├── models/                  ← Trained model saved here
-├── output/                  ← Final extracted articles JSON
+├── output/                  ← Final extracted JSON and cropped images
+│   ├── extracted_articles.json
+│   └── separated_articles/   ← Page-wise cropped article images
 │
 ├── step1_pdf_to_images.py   ← Convert PDFs → PNG images
 ├── step2_build_dataset.py   ← Build training dataset from annotations
@@ -158,7 +160,9 @@ python step5_inference.py
 python step5_inference.py --image output_images/lankadeepa_page_001.png
 ```
 
-Output: `output/extracted_articles.json`
+Output: 
+- `output/extracted_articles.json` containing the extracted text and image references.
+- Cropped article images saved under `output/separated_articles/` page-wise.
 
 ---
 
@@ -204,12 +208,12 @@ Output saved to `output/lankadeepa_page_001_visualized.png`
 {
   "lankadeepa_page_001.png": [
     {
-      "headline": "ශ්‍රී ලංකාවේ ආර්ථිකය ශක්තිමත් වෙයි",
-      "body": "ශ්‍රී ලංකා මහ බැංකුව අද ප්‍රකාශ කළේ..."
+      "news": "ශ්‍රී ලංකාවේ ආර්ථිකය ශක්තිමත් වෙයි ශ්‍රී ලංකා මහ බැංකුව අද ප්‍රකාශ කළේ...",
+      "image_path": "output/separated_articles/lankadeepa_page_001_article_1.png"
     },
     {
-      "headline": "ක්‍රිකට් කණ්ඩායම ජය ගනී",
-      "body": "ශ්‍රී ලංකා ක්‍රිකට් කණ්ඩායම ඊයේ..."
+      "news": "ක්‍රිකට් කණ්ඩායම ජය ගනී ශ්‍රී ලංකා ක්‍රිකට් කණ්ඩායම ඊයේ...",
+      "image_path": "output/separated_articles/lankadeepa_page_001_article_2.png"
     }
   ]
 }
