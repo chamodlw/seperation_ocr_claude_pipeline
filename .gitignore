@@ -1,0 +1,55 @@
+# Python bytecode & cache files
+__pycache__/
+*.py[cod]
+*$py.class
+.ipynb_checkpoints/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+bin/
+lib/
+include/
+pip-log.txt
+pip-delete-this-directory.txt
+
+# IDE / Editor configurations
+.vscode/
+.idea/
+*.swp
+*.swo
+*.sublime-project
+*.sublime-workspace
+
+# OS files
+.DS_Store
+.DS_Store?
+._*
+Thumbs.db
+ehthumbs.db
+
+# Project-specific large directories (Inputs, Outputs, and Models)
+# These directories contain large PDFs, extracted images, model checkpoints, and run outputs
+input_pdfs/
+output_images/
+models/
+output/
+{input_pdfs,output_images,annotated_data,models,output}/
+
+# Deep learning & Hugging Face caches
+.cache/
+.huggingface/
+huggingface/
+.pytest_cache/
+
+# Large preprocessed / encoded datasets (but keep raw annotations by default)
+annotated_data/encoded_dataset/
+# If you also want to ignore raw dataset JSON files, uncomment the following line:
+# annotated_data/*.json
+
+# Logs and training metrics
+*.log
+tensorboard/
+runs/

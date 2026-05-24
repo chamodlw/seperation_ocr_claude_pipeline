@@ -1,0 +1,14 @@
+torch==2.8.0
+torchvision==0.23.0
+transformers==4.38.0
+datasets
+seqeval
+timm
+pytesseract
+Pillow
+opencv-python
+pdf2image
+label-studio-sdk
+pandas
+numpy
+scikit-learn
